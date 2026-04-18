@@ -1,0 +1,12 @@
+{
+  "appId": "app.lovable.9469c6f781144a5dacaa9f36b8bcdea5",
+  "appName": "Flashlight",
+  "webDir": "dist",
+  "server": {
+    "url": "https://9469c6f7-8114-4a5d-acaa-9f36b8bcdea5.lovableproject.com?forceHideBadge=true",
+    "cleartext": true
+  },
+  "plugins": {
+    "Permissions": {}
+  }
+}
