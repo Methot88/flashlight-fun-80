@@ -1,17 +1,48 @@
 import { useEffect, useRef, useState } from "react";
-import { Flashlight, Zap } from "lucide-react";
+import { Flashlight, Zap, AlertTriangle } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
+
+// SOS in Morse: ... --- ...
+// Unit = base time. Dot = 1u, Dash = 3u, intra-letter gap = 1u,
+// inter-letter gap = 3u, inter-word gap = 7u.
+type SosStep = { on: boolean; units: number };
+const SOS_PATTERN: SosStep[] = [
+  // S = . . .
+  { on: true, units: 1 }, { on: false, units: 1 },
+  { on: true, units: 1 }, { on: false, units: 1 },
+  { on: true, units: 1 },
+  { on: false, units: 3 }, // letter gap
+  // O = - - -
+  { on: true, units: 3 }, { on: false, units: 1 },
+  { on: true, units: 3 }, { on: false, units: 1 },
+  { on: true, units: 3 },
+  { on: false, units: 3 }, // letter gap
+  // S = . . .
+  { on: true, units: 1 }, { on: false, units: 1 },
+  { on: true, units: 1 }, { on: false, units: 1 },
+  { on: true, units: 1 },
+  { on: false, units: 7 }, // word gap before repeat
+];
 
 const Index = () => {
   const [on, setOn] = useState(false);
   const [strobe, setStrobe] = useState(false);
   const [hz, setHz] = useState(8);
   const [strobeOn, setStrobeOn] = useState(true);
+  const [sos, setSos] = useState(false);
+  const [sosUnit, setSosUnit] = useState(200); // ms per unit
+  const [sosOn, setSosOn] = useState(true);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
+  const sosTimeoutRef = useRef<number | null>(null);
   const [hardwareTorch, setHardwareTorch] = useState(false);
+
+  // Strobe and SOS are mutually exclusive
+  useEffect(() => {
+    if (sos && strobe) setStrobe(false);
+  }, [sos, strobe]);
 
   // Acquire camera torch when turning on
   useEffect(() => {
@@ -99,7 +130,47 @@ const Index = () => {
     };
   }, [on, strobe, hz, hardwareTorch]);
 
-  const lightActive = on && (!strobe || strobeOn);
+  // SOS loop — runs the Morse pattern on repeat
+  useEffect(() => {
+    const clearSos = () => {
+      if (sosTimeoutRef.current) {
+        clearTimeout(sosTimeoutRef.current);
+        sosTimeoutRef.current = null;
+      }
+    };
+
+    clearSos();
+    setSosOn(true);
+
+    if (!on || !sos) return;
+
+    let stepIndex = 0;
+    let cancelled = false;
+
+    const runStep = () => {
+      if (cancelled) return;
+      const step = SOS_PATTERN[stepIndex];
+      setSosOn(step.on);
+      const track = trackRef.current;
+      if (track && hardwareTorch) {
+        try {
+          track.applyConstraints({ advanced: [{ torch: step.on } as MediaTrackConstraintSet] });
+        } catch {}
+      }
+      stepIndex = (stepIndex + 1) % SOS_PATTERN.length;
+      sosTimeoutRef.current = window.setTimeout(runStep, step.units * sosUnit);
+    };
+
+    runStep();
+
+    return () => {
+      cancelled = true;
+      clearSos();
+    };
+  }, [on, sos, sosUnit, hardwareTorch]);
+
+  const lightActive =
+    on && (sos ? sosOn : strobe ? strobeOn : true);
 
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-between overflow-hidden bg-background px-6 py-10">
@@ -108,7 +179,13 @@ const Index = () => {
           Torch
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {hardwareTorch ? "Hardware flashlight active" : on ? "Screen light mode" : "Tap to turn on"}
+          {sos && on
+            ? "Sending SOS…"
+            : hardwareTorch
+            ? "Hardware flashlight active"
+            : on
+            ? "Screen light mode"
+            : "Tap to turn on"}
         </p>
       </header>
 
@@ -153,7 +230,14 @@ const Index = () => {
               <p className="text-xs text-muted-foreground">Pulsing flash</p>
             </div>
           </div>
-          <Switch checked={strobe} onCheckedChange={setStrobe} disabled={!on} />
+          <Switch
+            checked={strobe}
+            onCheckedChange={(v) => {
+              setStrobe(v);
+              if (v) setSos(false);
+            }}
+            disabled={!on}
+          />
         </div>
 
         <div className={`space-y-3 ${strobe && on ? "opacity-100" : "opacity-40"}`}>
@@ -168,6 +252,43 @@ const Index = () => {
             max={20}
             step={0.5}
             disabled={!strobe || !on}
+          />
+        </div>
+
+        <div className="h-px w-full bg-border" />
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/15">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">SOS</p>
+              <p className="text-xs text-muted-foreground">Morse distress signal</p>
+            </div>
+          </div>
+          <Switch
+            checked={sos}
+            onCheckedChange={(v) => {
+              setSos(v);
+              if (v) setStrobe(false);
+            }}
+            disabled={!on}
+          />
+        </div>
+
+        <div className={`space-y-3 ${sos && on ? "opacity-100" : "opacity-40"}`}>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Unit length</span>
+            <span className="font-medium text-foreground">{sosUnit} ms</span>
+          </div>
+          <Slider
+            value={[sosUnit]}
+            onValueChange={(v) => setSosUnit(v[0])}
+            min={80}
+            max={400}
+            step={20}
+            disabled={!sos || !on}
           />
         </div>
       </section>
